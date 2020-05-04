@@ -1,0 +1,356 @@
+---
+title: "Data Wrangling Final Project"
+author: "Vincent Pepe vp448"
+date: "5/4/2020"
+output:
+  pdf_document: default
+  word_document: default
+  df_print: paged
+---
+
+
+
+```{r packages, message=FALSE, warning=FALSE, include=FALSE}
+library(curl)
+library(tidytext)
+library(rvest)
+library(tidyverse)
+library(tidymodels)
+library(caret)
+library(faraway)
+library(doParallel)
+library(vip)
+library(knitr)
+```
+
+# Introduction
+
+
+As we have seen over the past few weeks, soccer leagues such as the Ligue 1 in France and the Eredivisie in the Netherlands have either completely nulled the rest of the season, or have cancelled it and declared the team in first place the winner. This is a trend we have seen in the sports world since the start of COVID-19, as many sports organizations are still undecided on how to proceed. League officials not only have to take into account the health of the players, but also how it will affect the financials of each team. Sports teams make most of their revenue off of ticket sales, broadcasting, division placement, and merchandise, all which have been brought to a halt as the world is still virtually frozen. Many sports leagues worldwide are still debating how to proceed, doing their best to try and keep the teams afloat.
+
+With the lack of sports leaving hardcore fans forced to watch replays, and the uncertantinty of the return of live games, I thought it would be interesting to look at how it affected one of the world's most popular sports, hockey. The season came to an abrupt pause, leaving teams with between 11-14 games left in the regular season. The NHL, which has an average viewership of 16.5 million people per game, is the most popular hockey league worldwide, so I have chosen to do my final project using their data. They estimate the NHL itself has lost almost 1 billion dollars in revenue since the halt. For this project, I will be performing model selection in preparation for creating a probability predictive model to predict the winners of the final 11-14 games of the season. As there are many teams still in contention to make the playoffs, as well as secure a wildcard spot, this last chunk of games could be very crucial to how a team moves forward the rest of the season. Rumors have been looming about sending the top 16 teams straight to the playoffs and cancelling the rest of the regular season. If the NHL goes in that direction, this model would be a great basis on how the rest of the season could have gone, and if those top 16 teams would remain in those spots.
+
+
+
+# Sports Analytics
+
+
+Sports analytics was made famous by Billy Beane, the manager of the baseball team the Oakland Athletics back in 2009, where he took a team that had not had a winning record in almost 12 years to the playoffs, basing his managerial decisions based on statistical analysis. This was unheard of in the sports world at the time, and over the years many teams have started implementing some of those techniques into the way they run their teams. As baseball is very slow and methodical, with about four times as many stats as hockey, it was the perfect sport to introduce such an influential method of managing. Statistical analysis in hockey is fairly new compared to most sports. As hockey is a fast paced, very unpredictable game, it has made it very difficult to integrate it into the sport. For example, trying to compare the runs scored in a baseball game to the number of goals scored in a hockey game is almost impossible. Some baseball teams will have 10 hits in a game and only score three runs, whereas a hockey team could have 30 plus shots in a game and only score one or two goals. At the end of the day, it's not about how many runs or goals a team has scored in a game, it’s about holding the opponent to less points then your team.This is where having a statistical edge over the opposing team can be a crucial decider. Over the past few years, there have been two very influential statistics created that give a great overall idea of how a player or team is performing on the ice called the Fenwick and Corsi stats, created by Jerome Corsi and Matt Fenwick. They both measure a variation of the shot attempt differential while teams are playing at even strength, their only difference being Corsi takes into account blocked shots, where Fenwick doesn’t. These stats are vital to every team's statistical models, and they will be taken into account in my model as well.
+
+
+# Datasets
+
+The datasets I will be using in this project come from two different websites, one from hockeyreference.com, and the other from puckon.net. Hockeyreference.com contains the more widely kept, basic stats such as wins, losses, shots, shooting percentage, power plays, etc, whereas puckon.net contains the advanced statistics like Corsi, Fenwick, and an advanced shot on goal statistic. The hockeyreference.com dataset was given as a .csv file and the puckon.net dataset was scraped using R’s rvest package.
+
+
+
+```{r hockey_reference_data, include=FALSE}
+hockey_ref <- read.csv("hockey_reference_teams.csv") %>% 
+  tibble() %>%
+  drop_na() %>%
+  mutate(Team = as.character(Team)) %>% 
+  rename("rank" = ï..Rk,
+         "PTS.percent" = PTS., 
+         "Simp.Rating.Sys" = SRS,
+         "Strength.Schedule" = SOS,
+         "Power.Play.percent" = PP.,
+         "Pen.Kill.percent" = PK.,
+         "Short.Hand.G" = SH,
+         "Short.Hand.GA" = SHA,
+         "Shots" = S,
+         "Shot.percent" = S.,
+         "ShutOuts" = SO)
+
+head(hockey_ref, 5)
+```
+
+```{r hockey_ref class check, include=FALSE}
+lapply(hockey_ref, class)
+```
+
+```{r numeric_hockey_ref, include=FALSE}
+hockey_ref[, 3:33] <- lapply(hockey_ref[, 3:33], as.numeric)
+```
+
+```{r puckon_dataset, include=FALSE}
+puckOn <- "http://www.puckon.net/" %>% 
+  read_html() %>% 
+  html_node("#dataTable") %>% 
+  html_table() %>% 
+  .[-33, ]
+
+head(puckOn, 5)
+```
+
+
+# Data Wrangling
+
+When I first started working with these datasets, there were many glaring differences between the two that really gave me a tough time when preparing to merge the datasets. First off, the hockey reference dataset had each team name fully written out, whereas the puckon dataset had each team’s name abbreviated. Another difference was the lack of rank in the puckon dataset, which proved to be a difficult problem for me early on in the wrangling process. After reading in the hockey reference dataset, I immediately change the names of some of the variables to make it easier for people to understand what each variable means. I then checked the class of each variable to make sure they were all class numeric and realized not all of that was true. I converted all of the numerical variables to class numeric and then moved onto the puckon dataset. The real difficult part of the wrangling was getting the puckon dataset set up correctly and clean. Off the bat, I had to rename all 16 variables in the dataframe as the variable names were all wrong. As all scraped data is read in as a character variable, I next converted all the numeric variables to class numeric. As each dataset had different Team variables, I tried to merge the datasets by total points and games played. After having duplicate team names in my dataset, I realized that there were five teams that all had the same number of games played and total points. To combat this problem, I decided to create a ranking variable in the puckon dataset and merge by rank, points, and games played. Again, this gave me duplicates. After carefully looking at the differences, I realized the puckon dataset had teams 16-20 in the wrong order.
+
+```{r rename_cols, include=FALSE}
+colnames(puckOn) <- c("Team.abv", "GP", "PTS", "C.SA", "C.SVA", "C.ESVA", "C.Close",
+                      "F.SA", "F.SVA", "F.ESVA", "F.Close", "SOG.SA", "SOG.SVA", "SOG.ESVA", "SOG.Close")
+puckOn <- puckOn[-1,]
+```
+
+
+```{r puckOn numeric, include=FALSE}
+puckOn[, 2:15] <- lapply(puckOn[, 2:15], as.numeric)
+```
+
+
+```{r prep puckOn to merge, include=FALSE}
+puckOn <- puckOn %>% 
+  group_by(PTS, GP) %>% 
+  arrange(-PTS, -GP)
+```
+
+
+```{r St. Louis correct points, include=FALSE}
+puckOn[2,3] <- 94
+```
+
+```{r first merge attempt, include=FALSE}
+test <- left_join(hockey_ref, puckOn, by = c("GP", "PTS"))
+
+head(test, 7)
+```
+
+
+```{r create rank, arrange by rank, include=FALSE}
+puckOn$rank = 1:31
+
+puckOn <- puckOn %>% 
+  arrange(rank)
+puckOn <- puckOn %>%
+  select(rank, everything())
+
+kable(puckOn)
+```
+
+puckOn dataset:
+```{r showing difference between datasets(puck), echo=FALSE}
+
+kable(puckOn[16:20, ])
+```
+
+
+hockey_reference dataset:
+```{r showing difference between datasets(ref), echo=FALSE}
+kable(hockey_ref[16:20, ])
+```
+
+I created an intermittent dataframe that selected those 5 rows, used a case_when to get them in the correct order, and then set those 5 rows equal to that intermittent dataframe. I then merged the datasets together by rank, points, and games played to get my final dataset. Before creating my model, I decided to standardize the data to create a stronger, more accurate model.
+
+```{r correct ranking, include=FALSE}
+inter <- puckOn %>% 
+  filter(rank %in% c(16:20)) %>% 
+  mutate(rank = case_when(Team.abv == "NYR" ~ 16, 
+                          Team.abv == "CGY" ~ 17, 
+                          Team.abv == "VAN" ~ 18, 
+                          Team.abv == "FLA" ~ 19, 
+                          Team.abv == "NSH" ~ 20))
+
+puckOn[16:20, ] <- inter
+
+puckOn <- puckOn %>% 
+  arrange(rank)
+
+kable(puckOn)
+```
+
+
+```{r final merge, echo=FALSE}
+hockey_ref <- hockey_ref %>% 
+  arrange(rank)
+
+
+hackey <- left_join(hockey_ref, puckOn, by = c("rank", "GP", "PTS"))
+
+hackey <- hackey %>%
+  select(-c(Team.abv, AvAge)) %>% 
+  .[, -1]
+
+kable(head(hackey, 20))
+```
+
+```{r output to csv, include=FALSE}
+write.csv(hackey,"C:\\Users\\Vince\\Downloads\\2019_hockey_full.csv", row.names = FALSE)
+```
+
+
+# Variable Selection
+
+The crux of this project was the variable selection. At first, I was set on using forward or backward stepwise selection to shrink the number of covariates in my model. This did not go as expected. Using wins as my response variable, I ran the full model to get a basis for my selection and was surprised when it gave me mostly NA values in my intercepts, and all NA values in the standard error, t-value, and p-value slots. I tried this on both the standardized and non-standardized data and received the same result. I then tried to run Ridge and Lasso regressions on the standardized data, but was getting models with one or two covariates that didn’t make sense when trying to predict a win. After scouring the internet for a few days, I discovered that this could happen if there are more variables in the dataset than there are observations. This fit my dataset perfectly as I had 43 variables and 31 observations as there are only 31 teams in the NHL. In total, I removed 17 variables that I felt would not have any significant influence on predicting wins. I tried to run my linear model again, and was still getting NAs. Stepwise selection was not working either, so I ended up running Ridge and Lasso regression. Lasso regression in combination with bootstrapping, finally gave me a model with predictors that made sense.
+
+
+```{r standardize hackey, include=FALSE}
+hockey_standard <- hackey
+
+hockey_standard[, 2:43] <- scale(hackey[, 2:43], center = T, scale = T)
+```
+
+
+```{r problem 1, include=FALSE}
+test <- hockey_standard[, -1]
+test_lm <- lm(W ~., data = test)
+summary(test_lm)
+
+```
+
+
+```{r problem 2, include=FALSE}
+new_test <- hackey[, -1]
+new_test_lm <- lm(W ~., data = new_test)
+summary(new_test_lm)
+```
+
+
+```{r remove_vars, include=FALSE}
+hockey_standard <- hockey_standard %>% 
+  select(-c(GP, PTS, OL, PTS.percent, SOW, SOL, EVGF, EVGA, Power.Play.percent,
+            PPA, PPOA, Pen.Kill.percent, Short.Hand.G, Short.Hand.GA, PIM.G,
+            oPIM.G, ShutOuts))
+```
+
+
+```{r test and train, include=FALSE}
+hockey_train.index <- hockey_standard %>%
+  initial_split()
+
+hockey.train <- training(hockey_train.index)
+hockey.test <- testing(hockey_train.index)
+```
+
+```{r Lasso Regression (1), include=FALSE}
+hockey_recipe <- recipe(W ~., data = hockey.train) %>% 
+  update_role(Team, new_role = "ID") %>% 
+  step_zv(all_numeric(), -all_outcomes())
+
+
+hockey_prep <- hockey_recipe %>% 
+  prep(strings_as_factors = FALSE)
+
+lasso_spec <- linear_reg(penalty = .10, mixture = 1) %>% # mixture = 1 means lasso 
+  set_engine("glmnet")
+
+
+wf <- workflow() %>% 
+  add_recipe(hockey_recipe)
+
+
+lasso_fit <- wf %>% 
+  add_model(lasso_spec) %>% 
+  fit(data = hockey.train)
+
+lasso_fit %>% 
+  pull_workflow_fit() %>% 
+  tidy()
+
+set.seed(3142)
+hockey_boot <- bootstraps(hockey.train)
+
+tune_spec <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+lambda_grid <- grid_regular(penalty(),
+             levels = 50)
+
+
+```
+
+```{r Lasso Regression (2), include=FALSE}
+doParallel::registerDoParallel()
+
+set.seed(4231)
+lasso_grid <- tune_grid(
+  wf %>% add_model(tune_spec),
+  resamples = hockey_boot,
+  grid = lambda_grid
+)
+
+lasso_grid %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_line(show.legend = F) +
+  geom_errorbar(aes(ymin = mean - std_err, ymax = mean + std_err), alpha = 0.5) +
+  facet_wrap(~.metric, scales = "free", nrow = 2) +
+  scale_x_log10() +
+  theme(legend.position = "none")
+```
+
+```{r Lasso Regression (3), include=FALSE}
+lowest_rmse <- lasso_grid %>% 
+  select_best("rmse", maximize = F)
+
+final_lasso <- finalize_workflow(wf %>% add_model(tune_spec),
+                  lowest_rmse)
+```
+
+
+```{r Lasso Regression (4), echo=FALSE}
+final_lasso %>% 
+  fit(hockey.train) %>% 
+  pull_workflow_fit() %>% 
+  vip::vi(lambda = lowest_rmse$penalty) %>% 
+  mutate(Importance = abs(Importance),
+         Variable = fct_reorder(Variable, Importance)) %>% 
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(title = "Variable Importance of Lasso Regression", y = NULL)
+```
+
+I was actually surprised with some of the significant significant predictors. As Corsi and Fenwick are such great representations of how well a team is playing, I expected those predictors to be more significant than they are. I also expected Strength.Schedule to be more significant as I feel the teams with the easier schedules would be able to win more games.
+
+The standard error and R squared values also looked great for this model.
+```{r SE and Rsq, echo=FALSE}
+last_fit(final_lasso,
+        hockey_train.index) %>% 
+  collect_metrics()
+```
+
+This is a model I feel will perform great when I eventually move into creating my probability model.
+
+I will post a few plots showing the 3 most significant predictors compared against wins
+
+```{r win rating sys, echo=FALSE}
+ggplot(data = hackey, aes(W, Simp.Rating.Sys, color = Team)) +
+  geom_point() +
+  geom_text(aes(label = Team), hjust = .2, vjust = -.2) +
+  xlim(15, 55) +
+  labs(title = "Wins vs. Simple Rating System", y = "Simple Rating System", x = "Wins")
+```
+You can see that the more wins a team has, the higher their simple rating system is.
+
+
+```{r win goal against, echo=FALSE}
+ggplot(data = hackey, aes(y = W, x = GA, color = Team)) +
+  geom_point() +
+  geom_text(aes(label = Team), hjust = .2, vjust = -.2) +
+  labs(title = "Wins vs. Goals Against", x = "Goals Against", y = "Wins")
+```
+You can see from this graph that teams with more goals scored against them have a lower number of wins
+
+
+```{r win shot percent, echo=FALSE}
+ggplot(data = hackey, aes(y = W, x = Shot.percent, color = Team)) +
+  geom_point() +
+  geom_text(aes(label = Team), hjust = .2, vjust = -.2) +
+  labs(title = "Wins vs. Shooting Percentage", x = "Fenwick Close", y = "Wins")
+```
+You can see the higher a teams shooting percentage is, the more wins they will have.
+
+
+# Challenges
+
+I encountered two major challenges during this project. The first major problem I encountered was merging the datasets together. As both datsets had the teams written out differently, figuring out the best way to get them merged correctly without overcomplicating the code took me a very long time. Even after creating the rank variable, I still needed to figure out a way to get the teams with the same games and points to line up correctly. After working for a day or two, I ended up figuring out a way to use the case_when statement to swap the teams around, while using an intermittent dataframe for easy access. Even after figuring this out, the St. Louis Blues row would show up as all NA values. While inspecting the data, I realized the puckOn dataset actually had the St. Louis Blues total points wrong. Figuring that out finally allowed me to merge both the datasets together correctly and start my preprocessing.
+
+Another problem I encountered was when I started to preprocess and start my variable selection. In total, this probably took me about three to four days to complete. When I first started my preprocessing, I was set on doing forward or backward stepwise selection. After just running a basic linear model to get started, the summary of the linear model gave me almost all NA values. That is a problem I had never encountered before, nor could I find much about it on the internet. As we would say in the climbing world, this was the crux of my project. After turning to reddit, a person informed me that this can happen when there are more variables than observations, which was the perfect description of my dataset. To solve this problem, I removed 17 variables that I feel would be insignificant in the model. I tried to run a stepwise selection again, and the data still gave me all NAs. I decided to run both Ridge and Lasso regression after this, and the method that worked best was the Lasso regression. I think this worked best because lasso actually punishes high values of the Beta coefficients by actually setting them equal to 0, which is why some of my variables just shrunk to 0.
+
+# Conclusion
+
+After working on this project for a while, I cannot wait to dive into creating the probability model. Hockey is very far behind most sports in the analytics world, so being able to create a model with a R squared value so high is really giving me the motivation to pursue a job in this field. As I have been a life-long Devils fan, comparing their statistics to teams of a higher calibur is very interesting, and maybe one day I could implement some of the things I learned doing this project with them. Going forward, I plan on running simulations using neural nets to simulate the end of the regular season, and then eventually running my model with only playoff teams to see if I can predict the winner of the Stanley Cup. As I have secured an internship this summer with the Nashville Predators, I hope they can give me some guidance in improving this model.
+
+
+
